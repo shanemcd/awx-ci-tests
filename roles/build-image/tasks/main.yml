@@ -1,0 +1,63 @@
+---
+- name: Build and push image for running tests
+  block:
+    - name: Create a temporary directory for clone
+      tempfile:
+        state: directory
+      register: tmprepo
+
+    - set_fact:
+        ci_container_image_repo: quay.io/awx/awx-ci
+        dev_container_image_repo: gcr.io/ansible-tower-engineering/awx_devel
+        base_ref: "{{ tower_webhook_payload['pull_request']['base']['ref'] }}"
+        head_ref: "{{ tower_webhook_payload['pull_request']['head']['ref'] }}"
+
+    - set_fact:
+        cache_image_source: "{{ ci_container_image_repo }}:{{ head_ref }}"
+
+    - name: Clone repo
+      git:
+        depth: 1
+        repo: "{{ tower_webhook_payload['pull_request']['head']['repo']['html_url'] }}"
+        version: "{{ head_ref }}"
+        dest: "{{ tmprepo.path }}"
+
+    - name: Check for local cached image for this PR
+      command: |
+        docker images -q {{ cache_image_source }}
+      register: existing_image
+
+    - name: Warm cache if image is not present locally
+      block:
+        - set_fact:
+            cache_image_source: "{{ dev_container_image_repo }}:{{ base_ref }}"
+
+        - name: Pull image from dev registry
+          command: |
+            docker pull {{ cache_image_source }}
+          ignore_errors: yes
+          register: docker_pull
+          changed_when: "'Image is up to date' not in docker_pull.stdout"
+      when: "existing_image.stdout == ''"
+
+    - name: Build image for tests
+      command: |
+        docker build -t {{ ci_container_image_repo }}:{{ head_ref }} \
+          -f tools/docker-compose/Dockerfile \
+          --cache-from={{ cache_image_source }} .
+      args:
+        chdir: "{{ tmprepo.path }}"
+      register: docker_build
+      changed_when: "'Running in' in docker_build.stdout"
+
+    - name: Push image to ci registry
+      command: |
+        docker push {{ ci_container_image_repo }}:{{ head_ref }}
+      register: docker_push
+      changed_when: "'Pushed' in docker_push.stdout"
+
+  always:
+    - name: Clean up temporary files
+      file:
+        state: absent
+        path: "{{ tmprepo.path }}"

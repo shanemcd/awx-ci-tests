@@ -1,0 +1,6 @@
+---
+- name: Clean up from CI run
+  hosts: localhost
+  connection: local
+  tasks:
+    - debug:

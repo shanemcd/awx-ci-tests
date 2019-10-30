@@ -1,0 +1,6 @@
+---
+- name: Run checks againsnt pull request
+  hosts: localhost
+  connection: local
+  roles:
+    - check

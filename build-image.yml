@@ -1,0 +1,6 @@
+---
+- name: Build image for running AWX tests
+  become: yes
+  hosts: image_builders[0]
+  roles:
+    - build-image

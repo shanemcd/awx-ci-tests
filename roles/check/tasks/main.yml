@@ -1,0 +1,99 @@
+---
+- set_fact:
+    pod_name: "awx-pr-{{ tower_webhook_payload['number'] }}-{{ awx_job_id }}"
+    kubectl_base_command: |
+      kubectl --server=$KUBECTL_SERVER \
+        --namespace=$KUBECTL_NAMESPACE \
+        --certificate-authority=$KUBECTL_CA_CERT \
+        --token=$KUBECTL_TOKEN \
+
+- name: Create tmpfile for ca cert
+  tempfile:
+    suffix: ".kubectl_ca.crt"
+  register: awx_ci_kubectl_ca_file
+
+- name: Env vars for kubectl
+  set_fact:
+    kubectl_environment:
+      KUBECTL_SERVER: "{{ awx_ci_kubectl_server }}"
+      KUBECTL_NAMESPACE: "{{ awx_ci_kubectl_namespace }}"
+      KUBECTL_TOKEN: "{{ awx_ci_kubectl_token }}"
+      KUBECTL_CA_CERT: "{{ awx_ci_kubectl_ca_file.path }}"
+  no_log: yes
+
+- name: Run and clean up pod
+  block:
+    - name: Create tmpfile for pod
+      tempfile:
+        suffix: ".pod.yml"
+      register: podtmpfile
+
+    - name: Render podtmpfile
+      template:
+        src: pod.yml.j2
+        dest: "{{ podtmpfile.path }}"
+
+    - name: Populate ca cert file
+      copy:
+        content: "{{ awx_ci_kubectl_ca }}"
+        dest: "{{ awx_ci_kubectl_ca_file.path }}"
+
+    - name: Create pod
+      shell: |
+         {{ kubectl_base_command }} create -f {{ podtmpfile.path }}
+      environment: "{{ kubectl_environment }}"
+
+    - name: Wait for first init container to start
+      shell: |
+        {{ kubectl_base_command }} get pod {{ pod_name }} \
+          -o jsonpath="{.status.initContainerStatuses[0].state}"
+      register: result
+      until: result.stdout | regex_search('running|terminated')
+      delay: 5
+      retries: 50
+      environment: "{{ kubectl_environment }}"
+
+    - name: Tail logs for repo clone
+      shell: |
+        {{ kubectl_base_command }} logs -f {{ pod_name }} -c clone-repo
+      environment: "{{ kubectl_environment }}"
+
+    - name: Wait for test runner to start
+      shell: |
+        {{ kubectl_base_command }} get pod {{ pod_name }} -o jsonpath="{.status.phase}"
+      register: result
+      until: result.stdout in ['Running', 'Succeeded']
+      delay: 5
+      retries: 50
+      environment: "{{ kubectl_environment }}"
+
+    - name: Run the specified command
+      shell: |
+        {{ kubectl_base_command }} exec {{ pod_name }} -- \
+          bash -c "{{ '/entrypoint.sh ' + (awx_ci_command | quote) }}"
+      environment: "{{ kubectl_environment }}"
+
+    # - name: Copy artifacts to host
+    #   shell: |
+    #     kubectl cp {{ pod_name }}:{{ item }} {{ ansible_user_dir }}/{{ zuul.project.src_dir }}/
+    #   with_items: "{{ artifacts | default([]) }}"
+
+  always:
+    - name: Clean up tmpfiles
+      file:
+        state: absent
+        path: "{{ item }}"
+      with_items:
+        - "{{ awx_ci_kubectl_ca_file }}"
+        - "{{ podtmpfile }}"
+
+    - name: Clean up API objects
+      shell: |
+        {{ kubectl_base_command }} delete \
+          --grace-period=0 --force {{ item.object }} {{ item.name }}
+      environment: "{{ kubectl_environment }}"
+      with_items:
+        - object: configmap
+          name: "git-clone-{{ pod_name }}"
+        - object: pod
+          name: "{{ pod_name }}"

@@ -1,0 +1,52 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ pod_name }}"
+spec:
+  restartPolicy: Never
+  volumes:
+    - name: git-repo
+      emptyDir:
+        medium: Memory
+    - name: git-clone
+      configMap:
+        name: "git-clone-{{ pod_name }}"
+        defaultMode: 0755
+  initContainers:
+    - name: clone-repo
+      image: alpine/git
+      command:
+        - /usr/local/git/git-clone.sh
+      volumeMounts:
+        - name: git-repo
+          mountPath: /awx_devel
+        - name: git-clone
+          mountPath: /usr/local/git
+      env:
+        - name: GIT_REF
+          value: "{{ tower_webhook_payload['pull_request']['head']['ref'] }}"
+  containers:
+    - name: tests
+      imagePullPolicy: Always
+      image: "quay.io/awx/awx-ci:{{ tower_webhook_payload['pull_request']['head']['ref'] }}"
+      workingDir: /awx_devel
+      args:
+        - sleep
+        - infinity
+      volumeMounts:
+        - name: git-repo
+          mountPath: /awx_devel
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "git-clone-{{ pod_name }}"
+data:
+  git-clone.sh: |
+    #!/bin/sh -xe
+    git init /awx_devel && cd /awx_devel
+    git remote add origin https://github.com/shanemcd/awx.git
+    git fetch origin +refs/heads/{{  tower_webhook_payload['pull_request']['head']['ref'] }}:
+    git checkout -f {{ tower_webhook_payload['pull_request']['head']['ref'] }}

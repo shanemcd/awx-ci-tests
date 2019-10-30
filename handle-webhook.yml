@@ -1,0 +1,42 @@
+---
+- name: Handle webhook
+  hosts: localhost
+  connection: local
+  tasks:
+    - name: Fail early if webhook payload is missing
+      fail:
+        msg: "This playbook is intended to be launched by a GitHub webhook."
+      when: "tower_webhook_payload is not defined"
+
+    - set_fact:
+        is_recheck_comment: |
+          {{
+            tower_webhook_event_type == 'issue_comment' and
+            tower_webhook_payload.comment.body == 'recheck'
+          }}
+        is_pull_request_updated: |
+          {{
+            tower_webhook_event_type == 'pull_request' and
+            tower_webhook_payload.action == 'synchronize'
+          }}
+
+    - set_fact:
+        run_checks: yes
+      when: |
+        (is_recheck_comment | trim | bool) or
+        (is_pull_request_updated | trim | bool)
+
+    # I couldnt get the tower_workflow_launch module to work.
+    # Throws a parse error on extra vars.
+    - name: Launch workflow
+      uri:
+        url: "{{ awx_host }}/api/v2/workflow_job_templates/{{ workflow_id | default(10) }}/launch/"
+        method: "POST"
+        user: "{{ awx_user }}"
+        password: "{{ awx_password }}"
+        force_basic_auth: yes
+        status_code: 201
+        body_format: json
+        body:
+          extra_vars:
+            tower_webhook_payload: "{{ tower_webhook_payload }}"
