@@ -31,9 +31,11 @@ spec:
       imagePullPolicy: Always
       image: "quay.io/awx/awx-ci:{{ tower_webhook_payload['pull_request']['head']['ref'] }}"
       workingDir: /awx_devel
+      command:
+        - bash
+        - -c
       args:
-        - sleep
-        - infinity
+        - 'mkfifo -m 600 /tmp/logpipe; tail -f /tmp/logpipe'
       volumeMounts:
         - name: git-repo
           mountPath: /awx_devel
