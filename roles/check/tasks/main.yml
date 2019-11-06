@@ -70,7 +70,7 @@
     - name: Run the specified command
       shell: |
         {{ kubectl_base_command }} exec {{ pod_name }} -- \
-          bash -c "{{ '/entrypoint.sh ' + (awx_ci_command | quote) }}"
+          bash -c "echo '' > /tmp/logpipe; {{ ['/entrypoint.sh', awx_ci_command, '| tee /tmp/logpipe'] | join(' ') }}"
       environment: "{{ kubectl_environment }}"
 
     # - name: Copy artifacts to host

@@ -1,0 +1,101 @@
+---
+- hosts: localhost
+  tasks:
+    - name: Check for required vars
+      fail:
+        msg: "{{ item }} must be defined"
+      when: item not in vars
+      with_items:
+        - awx_ci_ssh_key_passphrase
+        - awx_ci_vault_password
+
+    - name: Create awx-ci user
+      tower_user:
+        username: awx-ci
+        password: password
+        email: jenkins@ansible.com
+        first_name: Rage
+        last_name: Tater
+        state: present
+
+    - name: Create Ansible Org
+      tower_organization:
+        name: Ansible
+
+    - name: Grant awx-ci execute role in Ansible org
+      tower_role:
+        user: awx-ci
+        organization: "Ansible"
+        role: execute
+
+    - name: Create machine credential
+      tower_credential:
+        name: awx-ci ssh key
+        kind: ssh
+        organization: Ansible
+        ssh_key_data: "{{ lookup('file', '/Users/shanemcd/.ssh/id_rsa_awx-ci') }}"
+        ssh_key_unlock: "{{ awx_ci_ssh_key_passphrase }}"
+        username: awx
+
+    - name: Create vault credential
+      tower_credential:
+        name: awx-ci vault password
+        kind: vault
+        organization: Ansible
+        vault_password: "{{ awx_ci_vault_password }}"
+
+    # - name: Create project for awx-ci-tests repo
+    #   tower_project:
+    #     name: github.com/shanemcd/awx-ci-tests
+    #     scm_type: git
+    #     organization: Ansible
+    #     scm_update_on_launch: yes
+    #     scm_url: https://github.com/shanemcd/awx-ci-tests.git
+
+    - name: Create project for awx-ci-tests repo
+      tower_project:
+        name: github.com/shanemcd/awx-ci-tests
+        scm_type: manual
+        organization: Ansible
+        local_path: awx-ci-tests
+
+    - name: Create awx-ci inventory
+      tower_inventory:
+        name: awx-ci
+        organization: Ansible
+
+    - name: Add image-builder(s) to the inventory
+      tower_host:
+        name: image-builder-1.testing.ansible.com
+        inventory: awx-ci
+      register: image_builder
+
+    - name: Create image_builders group
+      tower_group:
+        name: image_builders
+        inventory: awx-ci
+
+    - name: Add image-builder(s) to group
+      command: |
+        tower-cli host associate --host='image-builder-1.testing.ansible.com' --group='image_builders'
+      register: image_builder_associate
+      changed_when: |
+        'changed: true' in image_builder_associate.stdout
+
+    - name: Create job template
+      tower_job_template:
+        name: AWX CI
+        project: github.com/shanemcd/awx-ci-tests
+        inventory: awx-ci
+        job_type: run
+        playbook: handle-webhook.yml
+        credential: awx-ci ssh key
+
+    # For some reason using `vault_credential:` on the task
+    # above does not work.
+    - name: Associate vault credential w/ JT
+      command: |
+        tower-cli job_template associate_credential --job-template='AWX CI' --credential='awx-ci vault password'
+      register: vault_credential_associate
+      changed_when: |
+        'changed: true' in vault_credential_associate.stdout
