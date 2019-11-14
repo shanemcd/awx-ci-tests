@@ -72,6 +72,25 @@
         {{ kubectl_base_command }} exec {{ pod_name }} -- \
           bash -c "echo '' > /tmp/logpipe; {{ ['/entrypoint.sh', awx_ci_command, '| tee /tmp/logpipe'] | join(' ') }}"
       environment: "{{ kubectl_environment }}"
+      async: 1800
+      poll: 0
+      register: kubectl_exec_command
+
+    - name: Tail logs on websocket server
+      shell: |
+        {{ kubectl_base_command }} exec awx-ci-log-viewer-0 -c awx-ci-log-server -- \
+          bash -c "kubectl logs -f {{ pod_name }} > /logs/{{ pod_name }}"
+      environment: "{{ kubectl_environment }}"
+      async: 1800
+      poll: 0
+
+    - name: 'Check on kubectl exec command'
+      async_status:
+        jid: "{{ kubectl_exec_command.ansible_job_id }}"
+      register: job_result
+      until: job_result.finished
+      retries: 360
+      delay: 5
 
     # - name: Copy artifacts to host
     #   shell: |
