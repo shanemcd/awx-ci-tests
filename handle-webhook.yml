@@ -9,6 +9,8 @@
         msg: "This playbook is intended to be launched by a GitHub webhook."
       when: "tower_webhook_payload is not defined"
 
+    # Until we have some native way in AWX to ignore certain events,
+    # this is what we have.
     - set_fact:
         run_checks: no
         is_recheck_comment: |
@@ -28,11 +30,19 @@
         (is_recheck_comment | trim | bool) or
         (is_pull_request_updated | trim | bool)
 
+# - name: Build container image for tests
+#   hosts: image_builders[0]
+#   gather_facts: no
+#   tasks:
+#     - include_role:
+#         name: build-image
+#       when: hostvars['localhost']['run_checks'] | bool
 
-- name: Run CI Checks
-  hosts: image_builders[0]
+- name: Run CI Tests
+  hosts: localhost
   gather_facts: no
+  connection: local
   tasks:
-    - block:
-        - debug:
+    - include_role:
+        name: checks
       when: hostvars['localhost']['run_checks'] | bool

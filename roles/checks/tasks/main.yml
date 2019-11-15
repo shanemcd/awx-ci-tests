@@ -1,0 +1,143 @@
+---
+- block:
+  - name: Create tmpfiles for pod
+    tempfile:
+      suffix: ".pod.yml"
+    register: podtmpfiles
+    with_items: "{{ checks }}"
+
+  - name: Render podtmpfiles
+    template:
+      src: pod.yml.j2
+      dest: "{{ tmpfile.path }}"
+    vars:
+      pod_name: "{{ tower_webhook_payload['number'] }}-{{ awx_job_id }}-{{ tmpfile.item.name }}"
+    loop: "{{ podtmpfiles.results }}"
+    loop_control:
+      loop_var: tmpfile
+
+  - name: Create tmpfile for ca cert
+    tempfile:
+      suffix: ".kubectl_ca.crt"
+    register: awx_ci_kubectl_ca_file
+
+  - name: Populate ca cert file
+    copy:
+      content: "{{ awx_ci_kubectl_ca }}"
+      dest: "{{ awx_ci_kubectl_ca_file.path }}"
+
+  - name: Launch pods
+    shell: |
+       {{ kubectl_base_command }} create -f {{ tmpfile.path }}
+    environment: "{{ kubectl_environment }}"
+    async: 30
+    poll: 0
+    loop: "{{ podtmpfiles.results }}"
+    loop_control:
+      loop_var: tmpfile
+
+  # - name: Wait for first init container to start
+  #   shell: |
+  #     {{ kubectl_base_command }} get pod {{ pod_name }} \
+  #       -o jsonpath="{.status.initContainerStatuses[0].state}"
+  #   register: result
+  #   until: result.stdout | regex_search('running|terminated')
+  #   delay: 5
+  #   retries: 50
+  #   environment: "{{ kubectl_environment }}"
+
+  # - name: Tail logs for repo clone
+  #   shell: |
+  #     {{ kubectl_base_command }} logs -f {{ pod_name }} -c clone-repo
+  #   environment: "{{ kubectl_environment }}"
+
+  - name: Get status of test runners
+    shell: |
+      while [[ $({{ kubectl_base_command }} get pod {{ pod_name }} -o 'jsonpath={..status.conditions[?(@.type=="Ready")].status}') != "True" ]]; do echo "waiting for pod" && sleep 1; done
+    register: pod_statuses
+    async: 1800
+    poll: 0
+    environment: "{{ kubectl_environment }}"
+    vars:
+      pod_name: "{{ tower_webhook_payload['number'] }}-{{ awx_job_id }}-{{ tmpfile.item.name }}"
+    loop: "{{ podtmpfiles.results }}"
+    loop_control:
+      loop_var: tmpfile
+
+  - name: 'Wait for test runners to start'
+    async_status:
+      jid: "{{ item.ansible_job_id }}"
+    register: job_results
+    until: job_results.finished
+    retries: 360
+    delay: 5
+    loop: "{{ pod_statuses.results }}"
+
+  - name: Run the specified commands
+    shell: |
+      {{ kubectl_base_command }} exec {{ pod_name }} -- \
+        bash -c "echo '' > /tmp/logpipe; {{ ['/entrypoint.sh', tmpfile.item.command, '| tee /tmp/logpipe'] | join(' ') }}"
+    async: 1800
+    poll: 0
+    register: kubectl_exec_commands
+    environment: "{{ kubectl_environment }}"
+    vars:
+      pod_name: "{{ tower_webhook_payload['number'] }}-{{ awx_job_id }}-{{ tmpfile.item.name }}"
+    loop: "{{ podtmpfiles.results }}"
+    loop_control:
+      loop_var: tmpfile
+
+  # - name: Tail logs on websocket server
+  #   shell: |
+  #     {{ kubectl_base_command }} exec awx-ci-log-viewer-0 -c awx-ci-log-server -- \
+  #       bash -c "kubectl logs -f {{ pod_name }} > /logs/{{ pod_name }}"
+  #   environment: "{{ kubectl_environment }}"
+  #   async: 1800
+  #   poll: 0
+
+  - name: 'Check on kubectl exec commands'
+    async_status:
+      jid: "{{ item.ansible_job_id }}"
+    register: job_results
+    until: job_results.finished
+    retries: 360
+    delay: 5
+    loop: "{{ kubectl_exec_commands.results }}"
+
+  # - name: Copy artifacts to host
+  #   shell: |
+  #     kubectl cp {{ pod_name }}:{{ item }} {{ ansible_user_dir }}/{{ zuul.project.src_dir }}/
+  #   with_items: "{{ artifacts | default([]) }}"
+  always:
+    - name: Clean up pod tmpfiles
+      file:
+        state: absent
+        path: "{{ item.path }}"
+      loop: "{{ podtmpfiles.results }}"
+
+    - name: Clean up pods
+      shell: |
+        {{ kubectl_base_command }} delete \
+          --grace-period=0 --force pod {{ pod_name }}
+      environment: "{{ kubectl_environment }}"
+      vars:
+        pod_name: "{{ tower_webhook_payload['number'] }}-{{ awx_job_id }}-{{ tmpfile.item.name }}"
+      loop: "{{ podtmpfiles.results }}"
+      loop_control:
+        loop_var: tmpfile
+
+    - name: Clean up configmaps
+      shell: |
+        {{ kubectl_base_command }} delete \
+          --grace-period=0 --force configmap git-clone-{{ pod_name }}
+      environment: "{{ kubectl_environment }}"
+      vars:
+        pod_name: "{{ tower_webhook_payload['number'] }}-{{ awx_job_id }}-{{ tmpfile.item.name }}"
+      loop: "{{ podtmpfiles.results }}"
+      loop_control:
+        loop_var: tmpfile
+
+    - name: Clean up ca tmpfile
+      file:
+        state: absent
+        path: "{{ awx_ci_kubectl_ca_file.path }}"

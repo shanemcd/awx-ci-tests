@@ -1,0 +1,31 @@
+---
+checks:
+  - name: api-tests
+    command: "/start_tests.sh"
+
+  - name: ui-next-tests
+    command: "make ui-next-zuul-lint-and-test"
+
+  - name: ui-tests
+    command: "make ui-zuul-lint-and-test"
+
+  - name: api-lint
+    command: "flake8"
+
+  - name: awx-detect-schema-change
+    command: "/start_tests.sh detect-schema-change"
+
+  - name: awx-ansible-modules
+    command: "/start_tests.sh test_collection_all"
+
+kubectl_base_command: |
+  kubectl --server=$KUBECTL_SERVER \
+    --namespace=$KUBECTL_NAMESPACE \
+    --certificate-authority=$KUBECTL_CA_CERT \
+    --token=$KUBECTL_TOKEN \
+
+kubectl_environment:
+  KUBECTL_SERVER: "{{ awx_ci_kubectl_server }}"
+  KUBECTL_NAMESPACE: "{{ awx_ci_kubectl_namespace }}"
+  KUBECTL_TOKEN: "{{ awx_ci_kubectl_token }}"
+  KUBECTL_CA_CERT: "{{ awx_ci_kubectl_ca_file.path }}"

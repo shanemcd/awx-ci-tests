@@ -50,6 +50,12 @@
       register: docker_build
       changed_when: "'Running in' in docker_build.stdout"
 
+    - name: Log into docker registry
+      shell: |
+        echo $DOCKER_PASSWORD | docker login -u {{ docker_user }} --password-stdin {{ docker_server }}
+      environment:
+        DOCKER_PASSWORD: "{{ docker_password }}"
+
     - name: Push image to ci registry
       command: |
         docker push {{ ci_container_image_repo }}:{{ head_ref }}

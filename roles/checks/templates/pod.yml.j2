@@ -39,6 +39,16 @@ spec:
       volumeMounts:
         - name: git-repo
           mountPath: /awx_devel
+      resources:
+        requests:
+          memory: "2Gi"
+          cpu: "1500m"
+        limits:
+          memory: "4Gi"
+          cpu: "2000m"
+      env:
+        - name: PYTEST_NUM_PROCESSES
+          value: '2'
 
 ---
 apiVersion: v1
